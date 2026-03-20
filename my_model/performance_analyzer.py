@@ -1,5 +1,5 @@
 """
-Performance Analysis Script - Objective analysis of model performance
+Enhanced V5 Capstone Maximizer Performance Analysis Script
 
 Usage:
     python my_model/performance_analyzer.py
@@ -15,7 +15,7 @@ import os
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from my_model.model_development import precompute_features
+from my_model.model_development_enhanced1 import precompute_features
 from template.prelude_template import load_data
 
 
@@ -26,9 +26,9 @@ class PerformanceAnalyzer:
         self.btc_df = None
         
     def load_data(self):
-        """Load backtest results and feature data"""
-        # Load backtest results
-        with open("my_model/output/metrics.json", 'r') as f:
+        """Load V4 enhanced backtest results and feature data"""
+        # Load V4 enhanced backtest results
+        with open("my_model/output_enhanced1/metrics.json", 'r') as f:
             data = json.load(f)
         
         windows = []
@@ -85,24 +85,33 @@ class PerformanceAnalyzer:
         return yearly
     
     def analyze_mvrv_zones(self):
-        """Analyze MVRV zone distribution and performance"""
+        """Analyze MVRV absolute value distribution and V5 Capstone Maximizer performance"""
         print("\n" + "="*50)
-        print("MVRV ZONE ANALYSIS")
+        print("MVRV ABSOLUTE VALUE ANALYSIS (V5 Capstone Maximizer)")
         print("="*50)
         
-        # Zone distribution in dataset
-        zones = self.features_df['mvrv_zone'].value_counts().sort_index()
-        zone_names = {-2: 'DeepValue', -1: 'Value', 0: 'Neutral', 1: 'Caution', 2: 'Danger'}
+        # Absolute MVRV distribution in dataset
+        mvrv_absolute = self.features_df['mvrv_absolute']
+        polymarket_sentiment = self.features_df['polymarket_sentiment']
         
-        print("Historical zone distribution:")
-        for zone, count in zones.items():
-            name = zone_names.get(zone, f'Zone{zone}')
-            pct = count / len(self.features_df) * 100
-            print(f"  {name}: {count} days ({pct:.1f}%)")
+        print("Historical MVRV absolute value distribution:")
+        print(f"  Mean: {mvrv_absolute.mean():.2f}")
+        print(f"  Median: {mvrv_absolute.median():.2f}")
+        print(f"  Std: {mvrv_absolute.std():.2f}")
+        print(f"  Min: {mvrv_absolute.min():.2f}")
+        print(f"  Max: {mvrv_absolute.max():.2f}")
         
-        # Window performance by dominant MVRV zone
-        window_zones = []
-        window_mvrv_stats = []
+        print(f"\nPolymarket sentiment distribution:")
+        print(f"  Mean: {polymarket_sentiment.mean():.3f}")
+        print(f"  Median: {polymarket_sentiment.median():.3f}")
+        print(f"  Std: {polymarket_sentiment.std():.3f}")
+        print(f"  Min: {polymarket_sentiment.min():.3f}")
+        print(f"  Max: {polymarket_sentiment.max():.3f}")
+        
+        # MVRV ranges for V5 Capstone Maximizer
+        mvrv_ranges = []
+        sentiment_states = []
+        macro_trend_states = []
         
         for _, row in self.results_df.iterrows():
             start_date = row['start_date']
@@ -110,35 +119,78 @@ class PerformanceAnalyzer:
             
             window_features = self.features_df.loc[start_date:end_date]
             if len(window_features) > 0:
-                # Dominant zone
-                dominant_zone = window_features['mvrv_zone'].mode().iloc[0] if len(window_features['mvrv_zone'].mode()) > 0 else 0
-                # MVRV statistics for this window
-                avg_mvrv = window_features['mvrv_zscore'].mean()
-                max_mvrv = window_features['mvrv_zscore'].max()
-                min_mvrv = window_features['mvrv_zscore'].min()
+                avg_mvrv = window_features['mvrv_absolute'].mean()
+                min_mvrv = window_features['mvrv_absolute'].min()
+                max_mvrv = window_features['mvrv_absolute'].max()
+                # V5 specific: Polymarket sentiment and macro trend
+                avg_sentiment = window_features['polymarket_sentiment'].mean()
+                avg_price_bias = window_features['price_bias'].mean()
+                macro_uptrend_pct = (window_features['price_bias'] > 1.05).mean()
             else:
-                dominant_zone = 0
-                avg_mvrv = max_mvrv = min_mvrv = 0
+                avg_mvrv = min_mvrv = max_mvrv = 1.5
+                avg_sentiment = 0.5
+                avg_price_bias = 1.0
+                macro_uptrend_pct = 0.5
             
-            window_zones.append(dominant_zone)
-            window_mvrv_stats.append({'avg': avg_mvrv, 'max': max_mvrv, 'min': min_mvrv})
+            mvrv_ranges.append({'avg': avg_mvrv, 'min': min_mvrv, 'max': max_mvrv})
+            sentiment_states.append(avg_sentiment)
+            macro_trend_states.append(macro_uptrend_pct)
         
-        self.results_df['dominant_zone'] = window_zones
+        # Classify windows by MVRV level and V5 features
+        avg_mvrv_values = [r['avg'] for r in mvrv_ranges]
+        self.results_df['avg_mvrv_absolute'] = avg_mvrv_values
+        self.results_df['avg_sentiment'] = sentiment_states
+        self.results_df['macro_uptrend_pct'] = macro_trend_states
         
-        # Performance by zone
-        zone_performance = self.results_df.groupby('dominant_zone').agg({
-            'excess': ['mean', 'median', 'std', 'count'],
-            'is_win': 'mean'
-        }).round(2)
+        # Define MVRV ranges for V5 Capstone Maximizer
+        mvrv_bins = [0, 1.0, 1.5, 2.0, 3.0, np.inf]
+        mvrv_labels = ['DeepValue', 'Value', 'Neutral', 'Caution', 'Danger']
         
-        zone_performance.columns = ['Mean', 'Median', 'Std', 'Count', 'WinRate']
-        zone_performance['WinRate'] = (zone_performance['WinRate'] * 100).round(1)
+        self.results_df['mvrv_range'] = pd.cut(self.results_df['avg_mvrv_absolute'], bins=mvrv_bins, labels=mvrv_labels)
         
-        print("\nWindow performance by dominant zone:")
-        for zone in zone_performance.index:
-            name = zone_names.get(zone, f'Zone{zone}')
-            stats = zone_performance.loc[zone]
-            print(f"  {name}: {stats['Mean']:.2f}% mean, {stats['WinRate']:.1f}% win rate, {stats['Count']} windows")
+        # Performance by MVRV range
+        mvrv_performance = self.results_df.groupby('mvrv_range', observed=True).agg({
+            'excess': ['mean', 'median', 'count'],
+            'is_win': 'mean',
+            'avg_mvrv_absolute': 'mean',
+            'avg_sentiment': 'mean',
+            'macro_uptrend_pct': 'mean'
+        }).round(3)
+        
+        mvrv_performance.columns = ['ExcessMean', 'ExcessMedian', 'Count', 'WinRate', 'AvgMVRV', 'AvgSentiment', 'MacroUptrendPct']
+        mvrv_performance['WinRate'] = (mvrv_performance['WinRate'] * 100).round(1)
+        
+        print("\nPerformance by MVRV absolute value range (V5 Capstone Maximizer):")
+        for mvrv_range in mvrv_performance.index:
+            if pd.notna(mvrv_range):
+                stats = mvrv_performance.loc[mvrv_range]
+                print(f"  {mvrv_range}: {stats['ExcessMean']:.2f}% excess, {stats['WinRate']:.1f}% win rate, {stats['Count']} windows")
+                print(f"    Avg MVRV: {stats['AvgMVRV']:.2f}, Avg Sentiment: {stats['AvgSentiment']:.3f}, Macro Uptrend: {stats['MacroUptrendPct']:.1%}")
+        
+        # V5 specific: Analyze macro trend boost effectiveness
+        print(f"\nV5 Macro Trend Boost Analysis:")
+        macro_uptrend_windows = self.results_df[self.results_df['macro_uptrend_pct'] > 0.5]
+        macro_downtrend_windows = self.results_df[self.results_df['macro_uptrend_pct'] <= 0.5]
+        
+        if len(macro_uptrend_windows) > 0 and len(macro_downtrend_windows) > 0:
+            print(f"  Macro uptrend windows (>50% above MA200+5%): {len(macro_uptrend_windows)}")
+            print(f"    Avg excess: {macro_uptrend_windows['excess'].mean():.2f}%")
+            print(f"    Win rate: {macro_uptrend_windows['is_win'].mean()*100:.1f}%")
+            print(f"  Macro downtrend windows: {len(macro_downtrend_windows)}")
+            print(f"    Avg excess: {macro_downtrend_windows['excess'].mean():.2f}%")
+            print(f"    Win rate: {macro_downtrend_windows['is_win'].mean()*100:.1f}%")
+        
+        # V5 specific: Analyze Polymarket sentiment effectiveness
+        print(f"\nV5 Polymarket Sentiment Analysis:")
+        high_sentiment_windows = self.results_df[self.results_df['avg_sentiment'] > 0.6]
+        low_sentiment_windows = self.results_df[self.results_df['avg_sentiment'] < 0.4]
+        
+        if len(high_sentiment_windows) > 0:
+            print(f"  High sentiment windows (>0.6): {len(high_sentiment_windows)}")
+            print(f"    Avg excess: {high_sentiment_windows['excess'].mean():.2f}%")
+        if len(low_sentiment_windows) > 0:
+            print(f"  Low sentiment windows (<0.4): {len(low_sentiment_windows)}")
+            print(f"    Avg excess: {low_sentiment_windows['excess'].mean():.2f}%")
     
     def analyze_market_regimes(self):
         """Analyze performance across different market regimes"""
@@ -283,45 +335,116 @@ class PerformanceAnalyzer:
             print(f"  {date}: {excess:.2f}% ({regime}, {zone_name})")
     
     def analyze_signal_distribution(self):
-        """Analyze MVRV signal distribution across windows"""
+        """Analyze V5 Capstone Maximizer signal distribution"""
         print("\n" + "="*50)
-        print("SIGNAL DISTRIBUTION ANALYSIS")
+        print("V5 CAPSTONE MAXIMIZER SIGNAL DISTRIBUTION ANALYSIS")
         print("="*50)
         
-        # MVRV Z-score ranges
-        mvrv_bins = [-np.inf, -2, -1, 0, 1.5, 2.5, np.inf]
-        mvrv_labels = ['DeepValue', 'Value', 'Neutral', 'Caution', 'Danger', 'Extreme']
+        # MVRV absolute value ranges
+        mvrv_bins = [0, 1.0, 1.5, 2.0, 3.0, np.inf]
+        mvrv_labels = ['DeepValue', 'Value', 'Neutral', 'Caution', 'Danger']
         
-        # Calculate average MVRV for each window
+        # Calculate average signals for each window
         window_mvrv_avg = []
+        window_price_bias_avg = []
+        window_sentiment_avg = []
+        window_macro_uptrend_pct = []
+        
         for _, row in self.results_df.iterrows():
             start_date = row['start_date']
             end_date = start_date + pd.Timedelta(days=365)
             window_features = self.features_df.loc[start_date:end_date]
             if len(window_features) > 0:
-                avg_mvrv = window_features['mvrv_zscore'].mean()
+                avg_mvrv = window_features['mvrv_absolute'].mean()
+                avg_price_bias = window_features['price_bias'].mean()
+                avg_sentiment = window_features['polymarket_sentiment'].mean()
+                macro_uptrend_pct = (window_features['price_bias'] > 1.05).mean()
             else:
-                avg_mvrv = 0
+                avg_mvrv = 1.5
+                avg_price_bias = 1.0
+                avg_sentiment = 0.5
+                macro_uptrend_pct = 0.5
             window_mvrv_avg.append(avg_mvrv)
+            window_price_bias_avg.append(avg_price_bias)
+            window_sentiment_avg.append(avg_sentiment)
+            window_macro_uptrend_pct.append(macro_uptrend_pct)
         
-        self.results_df['avg_mvrv_zscore'] = window_mvrv_avg
-        self.results_df['mvrv_range'] = pd.cut(self.results_df['avg_mvrv_zscore'], bins=mvrv_bins, labels=mvrv_labels)
+        self.results_df['avg_mvrv_absolute'] = window_mvrv_avg
+        self.results_df['avg_price_bias'] = window_price_bias_avg
+        self.results_df['avg_sentiment'] = window_sentiment_avg
+        self.results_df['macro_uptrend_pct'] = window_macro_uptrend_pct
+        self.results_df['mvrv_range'] = pd.cut(self.results_df['avg_mvrv_absolute'], bins=mvrv_bins, labels=mvrv_labels)
         
-        # Performance by MVRV range
+        # Performance by MVRV range with V5 features
         mvrv_performance = self.results_df.groupby('mvrv_range', observed=True).agg({
             'excess': ['mean', 'median', 'count'],
             'is_win': 'mean',
-            'avg_mvrv_zscore': 'mean'
-        }).round(2)
+            'avg_mvrv_absolute': 'mean',
+            'avg_price_bias': 'mean',
+            'avg_sentiment': 'mean',
+            'macro_uptrend_pct': 'mean'
+        }).round(3)
         
-        mvrv_performance.columns = ['ExcessMean', 'ExcessMedian', 'Count', 'WinRate', 'AvgMVRV']
+        mvrv_performance.columns = ['ExcessMean', 'ExcessMedian', 'Count', 'WinRate', 'AvgMVRV', 'AvgPriceBias', 'AvgSentiment', 'MacroUptrendPct']
         mvrv_performance['WinRate'] = (mvrv_performance['WinRate'] * 100).round(1)
         
-        print("Performance by MVRV Z-score range:")
+        print("Performance by MVRV absolute value range (V5 Capstone Maximizer):")
         for mvrv_range in mvrv_performance.index:
             if pd.notna(mvrv_range):
                 stats = mvrv_performance.loc[mvrv_range]
-                print(f"  {mvrv_range}: {stats['ExcessMean']:.2f}% excess, {stats['WinRate']:.1f}% win rate, {stats['Count']} windows (avg Z: {stats['AvgMVRV']:.2f})")
+                print(f"  {mvrv_range}: {stats['ExcessMean']:.2f}% excess, {stats['WinRate']:.1f}% win rate, {stats['Count']} windows")
+                print(f"    Avg MVRV: {stats['AvgMVRV']:.2f}, Price/MA: {stats['AvgPriceBias']:.2f}")
+                print(f"    Sentiment: {stats['AvgSentiment']:.3f}, Macro Uptrend: {stats['MacroUptrendPct']:.1%}")
+        
+        # V5 specific analysis: Combined signal effectiveness
+        print(f"\nV5 Combined Signal Effectiveness Analysis:")
+        
+        # Macro trend boost analysis
+        strong_uptrend_windows = self.results_df[self.results_df['macro_uptrend_pct'] > 0.7]
+        weak_trend_windows = self.results_df[self.results_df['macro_uptrend_pct'] < 0.3]
+        
+        if len(strong_uptrend_windows) > 0:
+            print(f"  Strong macro uptrend (>70% above MA200+5%): {len(strong_uptrend_windows)} windows")
+            print(f"    Avg excess: {strong_uptrend_windows['excess'].mean():.2f}%")
+        if len(weak_trend_windows) > 0:
+            print(f"  Weak macro trend (<30% above MA200+5%): {len(weak_trend_windows)} windows")
+            print(f"    Avg excess: {weak_trend_windows['excess'].mean():.2f}%")
+        
+        # Sentiment modifier analysis
+        high_sentiment_windows = self.results_df[self.results_df['avg_sentiment'] > 0.6]
+        low_sentiment_windows = self.results_df[self.results_df['avg_sentiment'] < 0.4]
+        
+        if len(high_sentiment_windows) > 0:
+            print(f"  High Polymarket sentiment (>0.6): {len(high_sentiment_windows)} windows")
+            print(f"    Avg excess: {high_sentiment_windows['excess'].mean():.2f}%")
+        if len(low_sentiment_windows) > 0:
+            print(f"  Low Polymarket sentiment (<0.4): {len(low_sentiment_windows)} windows")
+            print(f"    Avg excess: {low_sentiment_windows['excess'].mean():.2f}%")
+        
+        # V5 Triple signal analysis
+        print(f"\nV5 Triple Signal Combination Analysis:")
+        deep_value_windows = self.results_df[self.results_df['avg_mvrv_absolute'] < 1.0]
+        danger_windows = self.results_df[self.results_df['avg_mvrv_absolute'] > 3.0]
+        
+        if len(deep_value_windows) > 0:
+            print(f"  Deep Value (MVRV < 1.0): {len(deep_value_windows)} windows, {deep_value_windows['excess'].mean():.2f}% avg excess")
+            # Deep value + macro uptrend + high sentiment
+            triple_boost = deep_value_windows[
+                (deep_value_windows['macro_uptrend_pct'] > 0.5) & 
+                (deep_value_windows['avg_sentiment'] > 0.5)
+            ]
+            if len(triple_boost) > 0:
+                print(f"    Deep Value + Macro Uptrend + High Sentiment: {len(triple_boost)} windows, {triple_boost['excess'].mean():.2f}% avg excess")
+        
+        if len(danger_windows) > 0:
+            print(f"  Danger (MVRV > 3.0): {len(danger_windows)} windows, {danger_windows['excess'].mean():.2f}% avg excess")
+            # Danger + weak trend + low sentiment (maximum protection)
+            triple_protection = danger_windows[
+                (danger_windows['macro_uptrend_pct'] < 0.3) & 
+                (danger_windows['avg_sentiment'] < 0.4)
+            ]
+            if len(triple_protection) > 0:
+                print(f"    Danger + Weak Trend + Low Sentiment: {len(triple_protection)} windows, {triple_protection['excess'].mean():.2f}% avg excess")
     
     def analyze_temporal_patterns(self):
         """Analyze temporal patterns in performance"""
@@ -374,7 +497,7 @@ class PerformanceAnalyzer:
         self.analyze_temporal_patterns()
         
         print(f"\n" + "="*50)
-        print("ANALYSIS COMPLETE")
+        print("V5 CAPSTONE MAXIMIZER ANALYSIS COMPLETE")
         print("="*50)
 
 

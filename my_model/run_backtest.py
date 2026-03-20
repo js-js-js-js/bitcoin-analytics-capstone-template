@@ -1,6 +1,11 @@
 import logging
 import pandas as pd
 from pathlib import Path
+import sys
+import os
+
+# Add project root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import template components
 from template.prelude_template import load_data

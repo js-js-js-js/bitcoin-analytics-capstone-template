@@ -9,9 +9,14 @@ It demonstrates how to:
 
 import logging
 from pathlib import Path
+import sys
+import os
 
 import numpy as np
 import pandas as pd
+
+# Add project root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import base functionality from template
 from template.prelude_template import load_polymarket_data

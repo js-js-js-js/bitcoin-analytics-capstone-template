@@ -1,10 +1,10 @@
-"""Enhanced Dynamic DCA model based on performance analysis insights.
+"""Enhanced Dynamic DCA model V7 - Asymmetric Bathtub Edition
 
-Key improvements:
-1. Asymmetric strategy using absolute MVRV values
-2. Absolute bottom protection (MVRV < 1.0)
-3. Bull market top protection (price bias + high MVRV)
-4. Non-symmetric approach addressing Bitcoin's unique characteristics
+Key breakthrough over V6:
+1. Solves the "Cash Drag" problem in secular bull market corrections
+2. Asymmetric bathtub curve: Exponential boost at extremes, flat middle zone
+3. MVRV 1.5-2.5 range maintains 1.0x multiplier (no cash drag!)
+4. Prevents model from getting scared during healthy bull market corrections
 """
 
 import logging
@@ -35,7 +35,7 @@ MVRV_COL = "CapMVRVCur"
 # Strategy parameters
 MIN_W = 1e-6
 MA_WINDOW = 200  # 200-day simple moving average
-DYNAMIC_STRENGTH = 5.0  # Base multiplier
+DYNAMIC_STRENGTH = 4.0  # Base multiplier
 
 # Enhanced thresholds using absolute MVRV values
 MVRV_ABSOLUTE_BOTTOM = 1.0  # Absolute bottom line
@@ -43,9 +43,9 @@ MVRV_RELATIVE_BOTTOM = 1.5  # Relative bottom
 MVRV_BULL_CAUTION = 2.0     # Bull market caution
 MVRV_EXTREME_TOP = 3.0      # Extreme overvaluation
 
-# Price bias thresholds (price / MA200 的绝对比值)
-PRICE_BIAS_CAUTION = 1.5    # 价格比MA200高出50% (增离严重)
-PRICE_BIAS_EXTREME = 2.0    # 价格比MA200高出100% (极度泡沫)
+# Price bias thresholds
+PRICE_BIAS_CAUTION = 1.5    # Price 50% above MA200
+PRICE_BIAS_EXTREME = 2.0    # Price 100% above MA200
 
 # Feature column names
 FEATS = [
@@ -57,11 +57,11 @@ FEATS = [
 
 
 # =============================================================================
-# Model-Specific Data Loading
+# Model-Specific Data Loading (Enhanced Polymarket Integration)
 # =============================================================================
 
 def load_polymarket_btc_sentiment() -> pd.DataFrame:
-    """Load Polymarket BTC sentiment (simplified version)"""
+    """Load Polymarket BTC sentiment with enhanced processing"""
     try:
         polymarket_data = load_polymarket_data()
         if "markets" not in polymarket_data:
@@ -76,32 +76,57 @@ def load_polymarket_btc_sentiment() -> pd.DataFrame:
             return pd.DataFrame()
         
         btc_markets["created_date"] = pd.to_datetime(btc_markets["created_at"]).dt.normalize()
+        
+        # Enhanced sentiment calculation with volume weighting
         daily_stats = btc_markets.groupby("created_date").agg(
             daily_market_count=("market_id", "count"),
             daily_volume=("volume", "sum")
         ).reset_index()
         
         daily_stats = daily_stats.set_index("created_date").sort_index()
-        daily_stats["polymarket_sentiment"] = 0.5  # Neutral for simplicity
+        
+        # Compute rolling percentiles for sentiment (30-day window)
+        daily_stats["market_count_pct"] = (
+            daily_stats["daily_market_count"]
+            .rolling(30, min_periods=1)
+            .apply(lambda x: (x.iloc[-1] > x[:-1]).sum() / max(len(x) - 1, 1) if len(x) > 1 else 0.5)
+        )
+        
+        daily_stats["volume_pct"] = (
+            daily_stats["daily_volume"]
+            .rolling(30, min_periods=1)
+            .apply(lambda x: (x.iloc[-1] > x[:-1]).sum() / max(len(x) - 1, 1) if len(x) > 1 else 0.5)
+        )
+        
+        # Enhanced sentiment: 60% volume weight, 40% count weight
+        daily_stats["polymarket_sentiment"] = (
+            daily_stats["volume_pct"] * 0.6 + daily_stats["market_count_pct"] * 0.4
+        )
+        
+        # Fill NaN with neutral (0.5)
+        daily_stats["polymarket_sentiment"] = daily_stats["polymarket_sentiment"].fillna(0.5)
+        
+        logging.info(f"Enhanced Polymarket sentiment computed: {len(daily_stats)} days")
         
         return daily_stats[["polymarket_sentiment"]]
-    except Exception:
+    except Exception as e:
+        logging.warning(f"Polymarket sentiment loading failed: {e}")
         return pd.DataFrame()
 
 
 # =============================================================================
-# Enhanced Feature Engineering
+# Enhanced Feature Engineering (V5 Capstone Maximizer)
 # =============================================================================
 
 def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute enhanced features using absolute MVRV approach"""
+    """Compute V5 enhanced features with macro trend boost"""
     if PRICE_COL not in df.columns:
         raise KeyError(f"'{PRICE_COL}' not found. Available: {list(df.columns)}")
 
     # Filter to valid date range
     price = df[PRICE_COL].loc["2010-07-18":].copy()
 
-    # 200-day MA and price bias
+    # Calculate MA200 for macro trend analysis
     ma200 = price.rolling(MA_WINDOW, min_periods=MA_WINDOW // 2).mean()
     price_bias = price / ma200  # Absolute ratio, not normalized
 
@@ -111,7 +136,7 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         mvrv_absolute = pd.Series(1.5, index=price.index)  # Default neutral
 
-    # Load Polymarket sentiment
+    # Load enhanced Polymarket sentiment
     try:
         polymarket_df = load_polymarket_btc_sentiment()
         if not polymarket_df.empty:
@@ -138,12 +163,12 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
     # Lag signals by 1 day to prevent look-ahead bias
     signal_cols = ["price_bias", "mvrv_absolute", "polymarket_sentiment"]
     features[signal_cols] = features[signal_cols].shift(1)
-    features = features.fillna(method='ffill').fillna(0.5)
+    features = features.ffill().fillna(0.5)
 
     return features
 
 # =============================================================================
-# Enhanced Weight Computation (使用 np.select 重构)
+# Enhanced Weight Computation V5 - Capstone Maximizer
 # =============================================================================
 
 def compute_enhanced_multiplier(
@@ -152,53 +177,48 @@ def compute_enhanced_multiplier(
     polymarket_sentiment: np.ndarray | None = None,
 ) -> np.ndarray:
     """
-    Compute enhanced multiplier using an EXPONENTIAL curve for massive outperformance
-    while keeping the absolute threshold safety locks.
+    V7 Asymmetric Bathtub Edition: Solves the "Cash Drag" trap in secular bull markets
     """
     
-    # =========================================================
-    # 1. Core exponential power engine: Non-linear exponential function
-    # Starting from MVRV = 1.8 (this coefficient is 1.0x)
-    # As MVRV decreases, exponential growth explodes
-    # =========================================================
-    DYNAMIC_STRENGTH = 4.0  # Strength coefficient, controls curve steepness
-    
-    # Exponential formula: exp((1.8 - MVRV) * DYNAMIC_STRENGTH)
-    # When MVRV = 1.8 -> multiplier = exp(0) = 1.0x
-    # When MVRV = 1.0 -> multiplier = exp(0.8 * 4) = exp(3.2) ≈ 24x
-    # When MVRV = 0.6 -> multiplier = exp(1.2 * 4) = exp(4.8) ≈ 121x
-    exponential_boost = np.exp((1.8 - mvrv_absolute) * DYNAMIC_STRENGTH)
+    # Base multiplier set to 1.0 - we maintain buying power in all conditions
+    multiplier = np.ones_like(mvrv_absolute)
     
     # =========================================================
-    # 2. Top risk protection: Natural exponential decay for high MVRV
-    # When MVRV > 2.0, apply exponential reduction
+    # 1. Left Side: Deep Value Zone (MVRV < 1.5)
+    # When MVRV is low, exponential boost kicks in
     # =========================================================
-    top_risk_mask = mvrv_absolute > 2.0
-    top_penalty = np.where(
-        top_risk_mask,
-        np.exp(-(mvrv_absolute - 2.0) * 2.0),  # Exponential decay
-        1.0
-    )
+    deep_value_mask = mvrv_absolute < 1.5
+    multiplier = np.where(deep_value_mask, np.exp((1.5 - mvrv_absolute) * 4.0), multiplier)
+    
+    # 1b. Absolute bottom protection (312 and FTX crash levels)
+    multiplier = np.where(mvrv_absolute < 1.0, multiplier * 2.0, multiplier)
     
     # =========================================================
-    # 3. Price bias protection: Prevent buying at extreme price levels
-    # When price > 120% of MA200, apply linear reduction
+    # 2. Right Side: Bubble Zone (MVRV > 2.5)
+    # When MVRV is high, exponential decay kicks in
     # =========================================================
-    bias_protection = np.where(
-        price_bias > 1.2,
-        np.maximum(0.1, 1.0 - (price_bias - 1.2) * 0.5),  # Linear reduction, min 0.1x
-        1.0
-    )
+    bubble_mask = mvrv_absolute > 2.5
+    multiplier = np.where(bubble_mask, np.exp((2.5 - mvrv_absolute) * 4.0), multiplier)
+    
+    # 【Core Innovation】: In the 1.5 to 2.5 range, multiplier stays at 1.0!
+    # This prevents cash drag in 2020 and 2023's bull market corrections
+    # Model keeps buying at normal pace, doesn't get scared by early corrections!
     
     # =========================================================
-    # 4. Combine all factors
+    # 3. Polymarket Contrarian Filter (keeps our proven orthogonal factor)
     # =========================================================
-    multiplier = exponential_boost * top_penalty * bias_protection
+    if polymarket_sentiment is not None:
+        sentiment_modifier = 1.4 - (0.8 * polymarket_sentiment)
+        multiplier = multiplier * sentiment_modifier
     
     # =========================================================
-    # 5. Safety locks: Prevent extreme values while allowing massive range
-    # Min: 0.0001x (almost zero buying in extreme danger)
-    # Max: 1000x (massive buying in extreme opportunity)
+    # 4. Final top risk protection (prevent bubble peak buying)
+    # =========================================================
+    top_risk_mask = (price_bias > 1.8) & (mvrv_absolute > 2.8)
+    multiplier = np.where(top_risk_mask, multiplier * 0.05, multiplier)
+    
+    # =========================================================
+    # 5. Safety locks
     # =========================================================
     multiplier = np.clip(multiplier, 1e-4, 1000.0)
     
@@ -212,7 +232,7 @@ def compute_weights_fast(
     n_past: int | None = None,
     locked_weights: np.ndarray | None = None,
 ) -> pd.Series:
-    """Compute weights using enhanced strategy"""
+    """Compute weights using V5 Capstone Maximizer strategy"""
     df = features_df.loc[start_date:end_date]
     if df.empty:
         return pd.Series(dtype=float)
@@ -229,7 +249,7 @@ def compute_weights_fast(
     else:
         polymarket_sentiment = None
 
-    # Compute enhanced multipliers
+    # Compute V5 enhanced multipliers
     multipliers = compute_enhanced_multiplier(
         price_bias, mvrv_absolute, polymarket_sentiment
     )
@@ -252,14 +272,14 @@ def compute_window_weights(
     current_date: pd.Timestamp,
     locked_weights: np.ndarray | None = None,
 ) -> pd.Series:
-    """Compute weights for a date range with enhanced strategy"""
+    """Compute weights for a date range with V5 Capstone Maximizer strategy"""
     full_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
     # Extend features for future dates
     missing = full_range.difference(features_df.index)
     if len(missing) > 0:
         placeholder = pd.DataFrame(
-            {col: 0.5 if 'sentiment' in col else 1.5 for col in features_df.columns},
+            {col: 0.5 if 'sentiment' in col else 1.5 if 'mvrv' in col else 1.0 for col in features_df.columns},
             index=missing,
         )
         features_df = pd.concat([features_df, placeholder]).sort_index()

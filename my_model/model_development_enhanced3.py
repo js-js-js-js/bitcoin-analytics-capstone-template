@@ -1,10 +1,6 @@
 """Enhanced Dynamic DCA model V7 - Asymmetric Bathtub Edition
 
-Key breakthrough over V6:
-1. Solves the "Cash Drag" problem in secular bull market corrections
-2. Asymmetric bathtub curve: Exponential boost at extremes, flat middle zone
-3. MVRV 1.5-2.5 range maintains 1.0x multiplier (no cash drag!)
-4. Prevents model from getting scared during healthy bull market corrections
+Enhanced3 baseline cloned from enhanced2 for safe iteration.
 """
 
 import logging
@@ -66,48 +62,48 @@ def load_polymarket_btc_sentiment() -> pd.DataFrame:
         polymarket_data = load_polymarket_data()
         if "markets" not in polymarket_data:
             return pd.DataFrame()
-        
+
         markets_df = polymarket_data["markets"]
         btc_markets = markets_df[
             markets_df["question"].str.contains("Bitcoin|BTC|btc", case=False, na=False)
         ].copy()
-        
+
         if btc_markets.empty:
             return pd.DataFrame()
-        
+
         btc_markets["created_date"] = pd.to_datetime(btc_markets["created_at"]).dt.normalize()
-        
+
         # Enhanced sentiment calculation with volume weighting
         daily_stats = btc_markets.groupby("created_date").agg(
             daily_market_count=("market_id", "count"),
             daily_volume=("volume", "sum")
         ).reset_index()
-        
+
         daily_stats = daily_stats.set_index("created_date").sort_index()
-        
+
         # Compute rolling percentiles for sentiment (30-day window)
         daily_stats["market_count_pct"] = (
             daily_stats["daily_market_count"]
             .rolling(30, min_periods=1)
             .apply(lambda x: (x.iloc[-1] > x[:-1]).sum() / max(len(x) - 1, 1) if len(x) > 1 else 0.5)
         )
-        
+
         daily_stats["volume_pct"] = (
             daily_stats["daily_volume"]
             .rolling(30, min_periods=1)
             .apply(lambda x: (x.iloc[-1] > x[:-1]).sum() / max(len(x) - 1, 1) if len(x) > 1 else 0.5)
         )
-        
+
         # Enhanced sentiment: 60% volume weight, 40% count weight
         daily_stats["polymarket_sentiment"] = (
             daily_stats["volume_pct"] * 0.6 + daily_stats["market_count_pct"] * 0.4
         )
-        
+
         # Fill NaN with neutral (0.5)
         daily_stats["polymarket_sentiment"] = daily_stats["polymarket_sentiment"].fillna(0.5)
-        
+
         logging.info(f"Enhanced Polymarket sentiment computed: {len(daily_stats)} days")
-        
+
         return daily_stats[["polymarket_sentiment"]]
     except Exception as e:
         logging.warning(f"Polymarket sentiment loading failed: {e}")
@@ -115,11 +111,11 @@ def load_polymarket_btc_sentiment() -> pd.DataFrame:
 
 
 # =============================================================================
-# Enhanced Feature Engineering (V5 Capstone Maximizer)
+# Enhanced Feature Engineering
 # =============================================================================
 
 def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute V5 enhanced features with macro trend boost"""
+    """Compute enhanced features with macro trend boost"""
     if PRICE_COL not in df.columns:
         raise KeyError(f"'{PRICE_COL}' not found. Available: {list(df.columns)}")
 
@@ -167,8 +163,9 @@ def precompute_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return features
 
+
 # =============================================================================
-# Enhanced Weight Computation V5 - Capstone Maximizer
+# Enhanced Weight Computation
 # =============================================================================
 
 def compute_enhanced_multiplier(
@@ -176,56 +173,38 @@ def compute_enhanced_multiplier(
     mvrv_absolute: np.ndarray,
     polymarket_sentiment: np.ndarray | None = None,
 ) -> np.ndarray:
-    """
-    V7 Asymmetric Bathtub Edition: Solves the "Cash Drag" trap in secular bull markets
-    """
-    
-    # Base multiplier set to 1.0 - we maintain buying power in all conditions
+    """Asymmetric bathtub multiplier with continuous price-bias penalty."""
+
+    # Base multiplier set to 1.0 - maintain buying power in all conditions
     multiplier = np.ones_like(mvrv_absolute)
-    
-    # =========================================================
-    # 1. Left Side: Deep Value Zone (MVRV < 1.5)
-    # Restore stronger alpha on genuine undervaluation
-    # =========================================================
+
+    # 1) Left Side: Deep Value Zone
     deep_value_mask = mvrv_absolute < 1.5
     multiplier = np.where(deep_value_mask, np.exp((1.5 - mvrv_absolute) * 3.0), multiplier)
 
-    # 1b. Absolute bottom protection
+    # 1b) Absolute bottom protection
     multiplier = np.where(mvrv_absolute < 1.0, multiplier * 1.5, multiplier)
-    
-    # =========================================================
-    # 2. Right Side: Bubble Zone (MVRV > 2.5)
-    # When MVRV is high, exponential decay kicks in
-    # =========================================================
+
+    # 2) Right Side: Bubble Zone
     bubble_mask = mvrv_absolute > 2.5
     multiplier = np.where(bubble_mask, np.exp((2.5 - mvrv_absolute) * 4.0), multiplier)
-    
-    # 【Core Innovation】: In the 1.5 to 2.5 range, multiplier stays at 1.0!
-    # This prevents cash drag in 2020 and 2023's bull market corrections
-    # Model keeps buying at normal pace, doesn't get scared by early corrections!
-    
-    # =========================================================
-    # 3. Keep sentiment neutral in this optimization round
-    # =========================================================
+
+    # 3) Keep sentiment neutral in this optimization round
     sentiment_modifier = 1.0
     multiplier = multiplier * sentiment_modifier
 
-    # =========================================================
-    # 4. Continuous price-bias penalty (main fix for buying too expensive)
-    # =========================================================
+    # 4) Continuous price-bias penalty
     pb_over = np.maximum(price_bias - 1.05, 0.0)
     price_penalty = np.exp(-2.2 * pb_over)
     multiplier = multiplier * price_penalty
 
-    # 4b. Softer top risk protection (only as final guardrail)
+    # 4b) Final guardrail
     top_risk_mask = (price_bias > 1.85) & (mvrv_absolute > 3.20)
     multiplier = np.where(top_risk_mask, np.minimum(multiplier, 0.42), multiplier)
-    
-    # =========================================================
-    # 5. Safety locks
-    # =========================================================
+
+    # 5) Safety locks
     multiplier = np.clip(multiplier, 1e-4, 1000.0)
-    
+
     return multiplier
 
 
@@ -236,7 +215,7 @@ def compute_weights_fast(
     n_past: int | None = None,
     locked_weights: np.ndarray | None = None,
 ) -> pd.Series:
-    """Compute weights using V5 Capstone Maximizer strategy"""
+    """Compute weights using enhanced strategy."""
     df = features_df.loc[start_date:end_date]
     if df.empty:
         return pd.Series(dtype=float)
@@ -247,18 +226,16 @@ def compute_weights_fast(
     # Extract and clean features
     price_bias = _clean_array(df["price_bias"].values)
     mvrv_absolute = _clean_array(df["mvrv_absolute"].values)
-    
+
     if "polymarket_sentiment" in df.columns:
         polymarket_sentiment = _clean_array(df["polymarket_sentiment"].values)
     else:
         polymarket_sentiment = None
 
-    # Compute V5 enhanced multipliers
-    multipliers = compute_enhanced_multiplier(
-        price_bias, mvrv_absolute, polymarket_sentiment
-    )
-    
-    # Window-level time profile: mild front-load by default, stronger in bull starts
+    # Compute multipliers
+    multipliers = compute_enhanced_multiplier(price_bias, mvrv_absolute, polymarket_sentiment)
+
+    # Window-level time profile
     t = np.linspace(0.0, 1.0, n)
     start_pb = float(np.nanmean(price_bias[:7]))
     start_mvrv = float(np.nanmean(mvrv_absolute[:7]))
@@ -270,7 +247,6 @@ def compute_weights_fast(
     else:
         time_profile = np.exp(-0.08 * t)
 
-    # Apply multipliers to base weights
     raw = base * multipliers * time_profile
 
     # Allocate with stability
@@ -278,9 +254,7 @@ def compute_weights_fast(
         n_past = n
     weights = allocate_sequential_stable(raw, n_past, locked_weights)
 
-    # Deterministic price-edge correction:
-    # blend toward inverse-price anchor only when current weighted buy price is too high.
-    # This directly targets the dominant failure mode seen in analysis.
+    # Deterministic price-edge correction
     prices = _clean_array(df[PRICE_COL].values)
     valid_price = np.where(prices > 0, prices, np.nan)
 
@@ -316,7 +290,7 @@ def compute_window_weights(
     current_date: pd.Timestamp,
     locked_weights: np.ndarray | None = None,
 ) -> pd.Series:
-    """Compute weights for a date range with V5 Capstone Maximizer strategy"""
+    """Compute weights for a date range with enhanced strategy."""
     full_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
     # Extend features for future dates
@@ -335,7 +309,5 @@ def compute_window_weights(
     else:
         n_past = 0
 
-    weights = compute_weights_fast(
-        features_df, start_date, end_date, n_past, locked_weights
-    )
+    weights = compute_weights_fast(features_df, start_date, end_date, n_past, locked_weights)
     return weights.reindex(full_range, fill_value=0.0)

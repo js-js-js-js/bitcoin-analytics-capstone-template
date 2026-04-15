@@ -45,6 +45,11 @@ MODEL_REGISTRY = {
         "output_dir": "my_model/output_enhanced3",
         "label": "Enhanced3",
     },
+    "enhanced4": {
+        "module": "my_model.model_development_enhanced4",
+        "output_dir": "my_model/output_enhanced4",
+        "label": "Enhanced4",
+    },
 }
 
 
@@ -369,7 +374,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        default="enhanced2",
+        default="enhanced3",
         choices=list(MODEL_REGISTRY.keys()),
         help="Model to analyze (maps to model file + output folder)",
     )

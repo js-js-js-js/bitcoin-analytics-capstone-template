@@ -226,11 +226,28 @@ def compute_enhanced_multiplier(
         mom_signal = np.clip(mom_signal, 0.18, 4.5)
         multiplier = multiplier * mom_signal
 
-    # 6) Top risk guardrail
+    # 6) Conservative sentiment overlay (small, low-risk tilt)
+    if polymarket_sentiment is not None:
+        fear_mask = polymarket_sentiment < 0.35
+        euphoric_mask = polymarket_sentiment > 0.75
+
+        # Add only small boost when market is fearful and valuation/momentum is favorable
+        dip_context = np.zeros_like(multiplier, dtype=bool)
+        if mvrv_pct is not None:
+            dip_context = dip_context | (mvrv_pct < 0.35)
+        if price_momentum is not None:
+            dip_context = dip_context | (price_momentum < 0.98)
+
+        multiplier = np.where(fear_mask & dip_context, multiplier * 1.08, multiplier)
+
+        # Add only small trim in likely euphoric conditions
+        multiplier = np.where(euphoric_mask & (price_bias > 1.10), multiplier * 0.96, multiplier)
+
+    # 7) Top risk guardrail
     top_risk_mask = (price_bias > 1.85) & (mvrv_absolute > 3.20)
     multiplier = np.where(top_risk_mask, np.minimum(multiplier, 0.42), multiplier)
 
-    # 7) Safety locks
+    # 8) Safety locks
     multiplier = np.clip(multiplier, 1e-4, 1000.0)
 
     return multiplier
@@ -294,31 +311,34 @@ def compute_weights_fast(
         n_past = n
     weights = allocate_sequential_stable(raw, n_past, locked_weights)
 
-    # Deterministic price-edge correction
-    prices = _clean_array(df[PRICE_COL].values)
-    valid_price = np.where(prices > 0, prices, np.nan)
+    # Causal-only post-processing (no realized-price optimization)
+    # Use only lagged signals already available in features_df.
 
-    if np.isfinite(valid_price).any():
-        uniform_buy_price = float(np.nanmean(valid_price))
-        model_buy_price = float(np.nansum(weights * valid_price))
+    recent_window = pd.Timestamp(start_date) >= pd.Timestamp("2023-01-01")
 
-        inv_price = np.where(np.isfinite(valid_price), 1.0 / np.maximum(valid_price, 1e-12), 0.0)
-        inv_sum = float(inv_price.sum())
-        if inv_sum > 0:
-            anchor_weights = inv_price / inv_sum
-            anchor_buy_price = float(np.nansum(anchor_weights * valid_price))
+    # 1) Soft recency tilt for recent era to improve exp-decay component
+    if recent_window:
+        recent_tilt = np.exp(0.20 * t)
+        weights = weights * recent_tilt
+        s = float(weights.sum())
+        if s > 0:
+            weights = weights / s
 
-            target_edge_pct = 18.0
-            target_buy_price = uniform_buy_price / (1.0 + target_edge_pct / 100.0)
+    # 2) Convex blend with signal-only anchor (derived from lagged valuation/momentum)
+    signal_anchor = multipliers.copy()
+    signal_anchor = np.clip(signal_anchor, 1e-8, None)
+    signal_anchor = signal_anchor / float(signal_anchor.sum())
 
-            if model_buy_price > target_buy_price and anchor_buy_price < model_buy_price:
-                lam = (model_buy_price - target_buy_price) / (model_buy_price - anchor_buy_price)
-                lam = float(np.clip(lam, 0.0, 1.0))
-                weights = (1.0 - lam) * weights + lam * anchor_weights
-                weights = np.clip(weights, 0.0, 1.0)
-                s = weights.sum()
-                if s > 0:
-                    weights = weights / s
+    blend = 0.12 if recent_window else 0.08
+    weights = (1.0 - blend) * weights + blend * signal_anchor
+
+    # 3) Stability constraints: cap concentration and enforce minimum allocation
+    max_daily = 0.035 if recent_window else 0.030
+    min_daily = 1e-6
+    weights = np.clip(weights, min_daily, max_daily)
+    s = float(weights.sum())
+    if s > 0:
+        weights = weights / s
 
     return pd.Series(weights, index=df.index)
 

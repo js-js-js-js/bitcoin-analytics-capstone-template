@@ -1,6 +1,10 @@
-"""Enhanced Dynamic DCA model V7 - Asymmetric Bathtub Edition
+"""Enhanced Dynamic DCA model V4 - COMPLIANT VERSION (No Violations)
 
-Enhanced3 branch: enhanced2 baseline + single price-penalty swap.
+This is a cleaned version of Enhanced4 with all violations removed:
+1. ❌ Removed: Recent window special handling (2023-01-01 cutoff)
+2. ❌ Removed: Window-level time profile (start_bull detection)
+3. ✅ Kept: All signal-based features (MVRV, price_bias, momentum, sentiment)
+4. ✅ Kept: Multiplier computation logic
 """
 
 import logging
@@ -30,18 +34,18 @@ MVRV_COL = "CapMVRVCur"
 
 # Strategy parameters
 MIN_W = 1e-6
-MA_WINDOW = 200  # 200-day simple moving average
-DYNAMIC_STRENGTH = 4.0  # Base multiplier
+MA_WINDOW = 200
+DYNAMIC_STRENGTH = 4.0
 
 # Enhanced thresholds using absolute MVRV values
-MVRV_ABSOLUTE_BOTTOM = 1.0  # Absolute bottom line
-MVRV_RELATIVE_BOTTOM = 1.5  # Relative bottom
-MVRV_BULL_CAUTION = 2.0     # Bull market caution
-MVRV_EXTREME_TOP = 3.0      # Extreme overvaluation
+MVRV_ABSOLUTE_BOTTOM = 1.0
+MVRV_RELATIVE_BOTTOM = 1.5
+MVRV_BULL_CAUTION = 2.0
+MVRV_EXTREME_TOP = 3.0
 
 # Price bias thresholds
-PRICE_BIAS_CAUTION = 1.5    # Price 50% above MA200
-PRICE_BIAS_EXTREME = 2.0    # Price 100% above MA200
+PRICE_BIAS_CAUTION = 1.5
+PRICE_BIAS_EXTREME = 2.0
 
 # Feature column names
 FEATS = [
@@ -53,7 +57,7 @@ FEATS = [
 
 
 # =============================================================================
-# Model-Specific Data Loading (Enhanced Polymarket Integration)
+# Model-Specific Data Loading
 # =============================================================================
 
 def load_polymarket_btc_sentiment() -> pd.DataFrame:
@@ -220,17 +224,33 @@ def compute_enhanced_multiplier(
     multiplier = multiplier * pb_penalty
 
     # 5) Short-term price momentum signal (captures weekly dips)
-    # Below SMA50 = dip = buy more; above SMA50 = rally = buy less
     if price_momentum is not None:
         mom_signal = np.exp(-3.3 * (price_momentum - 1.0))
         mom_signal = np.clip(mom_signal, 0.18, 4.5)
         multiplier = multiplier * mom_signal
 
-    # 6) Top risk guardrail
+    # 6) Conservative sentiment overlay (small, low-risk tilt)
+    if polymarket_sentiment is not None:
+        fear_mask = polymarket_sentiment < 0.35
+        euphoric_mask = polymarket_sentiment > 0.75
+
+        # Add only small boost when market is fearful and valuation/momentum is favorable
+        dip_context = np.zeros_like(multiplier, dtype=bool)
+        if mvrv_pct is not None:
+            dip_context = dip_context | (mvrv_pct < 0.35)
+        if price_momentum is not None:
+            dip_context = dip_context | (price_momentum < 0.98)
+
+        multiplier = np.where(fear_mask & dip_context, multiplier * 1.08, multiplier)
+
+        # Add only small trim in likely euphoric conditions
+        multiplier = np.where(euphoric_mask & (price_bias > 1.10), multiplier * 0.96, multiplier)
+
+    # 7) Top risk guardrail
     top_risk_mask = (price_bias > 1.85) & (mvrv_absolute > 3.20)
     multiplier = np.where(top_risk_mask, np.minimum(multiplier, 0.42), multiplier)
 
-    # 7) Safety locks
+    # 8) Safety locks
     multiplier = np.clip(multiplier, 1e-4, 1000.0)
 
     return multiplier
@@ -243,7 +263,7 @@ def compute_weights_fast(
     n_past: int | None = None,
     locked_weights: np.ndarray | None = None,
 ) -> pd.Series:
-    """Compute weights using enhanced strategy."""
+    """Compute weights using COMPLIANT enhanced strategy (no violations)."""
     df = features_df.loc[start_date:end_date]
     if df.empty:
         return pd.Series(dtype=float)
@@ -273,52 +293,30 @@ def compute_weights_fast(
         polymarket_sentiment = None
 
     # Compute multipliers
-    multipliers = compute_enhanced_multiplier(price_bias, mvrv_absolute, mvrv_pct, price_momentum, polymarket_sentiment)
+    multipliers = compute_enhanced_multiplier(
+        price_bias, mvrv_absolute, mvrv_pct, price_momentum, polymarket_sentiment
+    )
 
-    # Window-level time profile
-    t = np.linspace(0.0, 1.0, n)
-    start_pb = float(np.nanmean(price_bias[:7]))
-    start_mvrv = float(np.nanmean(mvrv_absolute[:7]))
+    # ❌ REMOVED: Window-level time profile (start_bull detection)
+    # ❌ REMOVED: Recent window special handling (2023-01-01 cutoff)
+    # ❌ REMOVED: Different blend ratios for recent windows
+    # ❌ REMOVED: Different max_daily constraints for recent windows
 
-    start_bull = (start_pb > 1.03) and (start_mvrv < 3.20)
-
-    if start_bull:
-        time_profile = np.exp(-1.35 * t)
-    else:
-        time_profile = np.exp(-0.08 * t)
-
-    raw = base * multipliers * time_profile
+    # Apply multipliers to base weights (simple and clean)
+    raw = base * multipliers
 
     # Allocate with stability
     if n_past is None:
         n_past = n
     weights = allocate_sequential_stable(raw, n_past, locked_weights)
 
-    # Deterministic price-edge correction
-    prices = _clean_array(df[PRICE_COL].values)
-    valid_price = np.where(prices > 0, prices, np.nan)
-
-    if np.isfinite(valid_price).any():
-        uniform_buy_price = float(np.nanmean(valid_price))
-        model_buy_price = float(np.nansum(weights * valid_price))
-
-        inv_price = np.where(np.isfinite(valid_price), 1.0 / np.maximum(valid_price, 1e-12), 0.0)
-        inv_sum = float(inv_price.sum())
-        if inv_sum > 0:
-            anchor_weights = inv_price / inv_sum
-            anchor_buy_price = float(np.nansum(anchor_weights * valid_price))
-
-            target_edge_pct = 18.0
-            target_buy_price = uniform_buy_price / (1.0 + target_edge_pct / 100.0)
-
-            if model_buy_price > target_buy_price and anchor_buy_price < model_buy_price:
-                lam = (model_buy_price - target_buy_price) / (model_buy_price - anchor_buy_price)
-                lam = float(np.clip(lam, 0.0, 1.0))
-                weights = (1.0 - lam) * weights + lam * anchor_weights
-                weights = np.clip(weights, 0.0, 1.0)
-                s = weights.sum()
-                if s > 0:
-                    weights = weights / s
+    # Simple stability constraints (uniform across all windows)
+    max_daily = 0.030  # Uniform constraint
+    min_daily = 1e-6
+    weights = np.clip(weights, min_daily, max_daily)
+    s = float(weights.sum())
+    if s > 0:
+        weights = weights / s
 
     return pd.Series(weights, index=df.index)
 
@@ -330,7 +328,7 @@ def compute_window_weights(
     current_date: pd.Timestamp,
     locked_weights: np.ndarray | None = None,
 ) -> pd.Series:
-    """Compute weights for a date range with enhanced strategy."""
+    """Compute weights for a date range with compliant enhanced strategy."""
     full_range = pd.date_range(start=start_date, end=end_date, freq="D")
 
     # Extend features for future dates
